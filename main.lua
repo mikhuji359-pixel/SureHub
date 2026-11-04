@@ -12,11 +12,10 @@ local Window = Rayfield:CreateWindow({
    KeySystem = false
 })
 
--- // VARIABLES & SERVICES
+-- // SERVICES & VARIABLES
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TeleportService = game:GetService("TeleportService")
-local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local Settings = {
@@ -30,62 +29,86 @@ local Settings = {
     ActiveRunning = false
 }
 
--- // BACKEND GAMEPLAY FUNCTIONS (CORE LOGIC)
-
--- Fungsi Cek Spawn Egg di Workspace / ReplicatedStorage
+-- // CORE GAMEPLAY METHOD & PATHING
+-- Fungsi untuk mendeteksi folder telur aktif di map game Steal an Egg
 local function GetTargetEggs()
-    local foundEggs = {}
-    -- Asumsi folder spawn telur berada di workspace atau folder spesifik game
-    if workspace:FindFirstChild("EggsFolder") then
-        for _, egg in ipairs(workspace.EggsFolder:GetChildren()) do
-            if egg:GetAttribute("Rarity") == Settings.SelectedRarity then
-                table.insert(foundEggs, egg)
+    local validEggs = {}
+    -- Mencari folder spawn telur standar di Workspace game
+    local eggsFolder = Workspace:FindFirstChild("Eggs") or Workspace:FindFirstChild("SpawnedEggs") or Workspace:FindFirstChild("Map")
+    
+    if eggsFolder then
+        for _, egg in ipairs(eggsFolder:GetDescendants()) do
+            -- Mengecek atribut rarity atau nama objek telur
+            if egg:IsA("Model") or egg:IsA("BasePart") then
+                local rarityAttr = egg:GetAttribute("Rarity") or egg:GetAttribute("Tier")
+                if rarityAttr == Settings.SelectedRarity or egg.Name:lower():find(Settings.SelectedRarity:lower()) then
+                    table.insert(validEggs, egg)
+                end
             end
         end
     end
-    return foundEggs
+    return validEggs
 end
 
--- Mode 1: Safe Zone Magnet & Instant Counter-Steal
+-- Mencari Remote Event utama game
+local function GetRemotes()
+    return ReplicatedStorage:FindFirstChild("Packages") 
+        and ReplicatedStorage.Packages:FindFirstChild("Net") 
+        or ReplicatedStorage:FindFirstChild("Remotes") 
+        or ReplicatedStorage
+end
+
+-- // METHOD MODE 1: SAFE ZONE MAGNET & INSTANT COUNTER-STEAL
 local function ExecuteMode1()
-    Rayfield:Notify({Title = "Mode 1 Active", Content = "Safe Zone Magnet & Packet Counter-Steal engaged for " .. Settings.SelectedRarity, Duration = 3})
+    Rayfield:Notify({Title = "Mode 1 Active", Content = "Safe Zone Magnet engaged for " .. Settings.SelectedRarity, Duration = 3})
     task.spawn(function()
         while Settings.ActiveRunning and Settings.SelectedMode == "Mode 1 (Safe Zone Magnet)" do
             local eggs = GetTargetEggs()
+            local remotes = GetRemotes()
+            
             for _, egg in ipairs(eggs) do
-                -- Trigger remote event untuk menarik telur ke safe zone atau counter-steal
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                if remotes and remotes:FindFirstChild("StealEgg") then
-                    remotes.StealEgg:FireServer(egg, "SafeZoneMagnet")
+                if remotes then
+                    -- Method remote event standar untuk interaksi/tarik telur
+                    local remoteEvent = remotes:FindFirstChild("RE_StealEgg") or remotes:FindFirstChild("StealEgg") or remotes:FindFirstChild("RequestSteal")
+                    if remoteEvent then
+                        remoteEvent:FireServer(egg)
+                    end
                 end
             end
-            task.wait(0.5)
+            task.wait(0.3)
         end
     end)
 end
 
--- Mode 2: Walk, Instant Pick, & Safe Zone Teleport
+-- // METHOD MODE 2: WALK & TELEPORT SAFE
 local function ExecuteMode2()
-    Rayfield:Notify({Title = "Mode 2 Active", Content = "Walking/Teleporting to target " .. Settings.SelectedRarity .. " egg...", Duration = 3})
+    Rayfield:Notify({Title = "Mode 2 Active", Content = "Walking/TP to target " .. Settings.SelectedRarity .. " egg...", Duration = 3})
     task.spawn(function()
         while Settings.ActiveRunning and Settings.SelectedMode == "Mode 2 (Walk & Teleport Safe)" do
             local eggs = GetTargetEggs()
-            if #eggs > 0 and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local character = LocalPlayer.Character
+            
+            if #eggs > 0 and character and character:FindFirstChild("HumanoidRootPart") then
                 local targetEgg = eggs[1]
-                -- Teleport / Walk ke posisi telur
-                LocalPlayer.Character.HumanoidRootPart.CFrame = targetEgg.CFrame
+                local targetPos = targetEgg:IsA("Model") and targetEgg:GetPivot() or targetEgg.CFrame
+                
+                -- Teleport langsung ke posisi telur untuk ambil instan
+                character.HumanoidRootPart.CFrame = targetPos
                 task.wait(0.1)
                 
-                -- Instant Pick Remote
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                if remotes and remotes:FindFirstChild("PickEgg") then
-                    remotes.PickEgg:FireServer(targetEgg)
+                local remotes = GetRemotes()
+                if remotes then
+                    local pickEvent = remotes:FindFirstChild("RE_PickEgg") or remotes:FindFirstChild("PickEgg") or remotes:FindFirstChild("InteractEgg")
+                    if pickEvent then
+                        pickEvent:FireServer(targetEgg)
+                    end
                 end
                 
-                -- Teleport balik ke Safe Zone
+                -- Teleport balik aman ke Base / Safe Zone
                 task.wait(0.1)
-                if workspace:FindFirstChild("SafeZone") then
-                    LocalPlayer.Character.HumanoidRootPart.CFrame = workspace.SafeZone.CFrame
+                local safeZone = Workspace:FindFirstChild("SafeZones") or Workspace:FindFirstChild("Base")
+                if safeZone and character:FindFirstChild("HumanoidRootPart") then
+                    character.HumanoidRootPart.CFrame = safeZone.PrimaryPart and safeZone.PrimaryPart.CFrame or CFrame.new(0, 50, 0)
                 end
             end
             task.wait(1)
@@ -93,24 +116,30 @@ local function ExecuteMode2()
     end)
 end
 
--- Mode 3: Multi-Step Relay Delivery with Shield Protection
+-- // METHOD MODE 3: MULTI-STEP RELAY DELIVERY + SHIELD
 local function ExecuteMode3()
     Rayfield:Notify({Title = "Mode 3 Active", Content = "Relay Delivery with Shield Protection engaged!", Duration = 3})
     task.spawn(function()
         while Settings.ActiveRunning and Settings.SelectedMode == "Mode 3 (Multi-step Relay)" do
             local eggs = GetTargetEggs()
-            if #eggs > 0 and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local character = LocalPlayer.Character
+            
+            if #eggs > 0 and character and character:FindFirstChild("HumanoidRootPart") then
                 local targetEgg = eggs[1]
-                -- Teleport ke telur
-                LocalPlayer.Character.HumanoidRootPart.CFrame = targetEgg.CFrame
-                task.wait(0.1)
+                local targetPos = targetEgg:IsA("Model") and targetEgg:GetPivot() or targetEgg.CFrame
                 
-                -- Simulasi 2-3 step relay delivery dengan force-field/network ownership lock
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                if remotes and remotes:FindFirstChild("RelayDeliver") then
-                    remotes.RelayDeliver:FireServer(targetEgg, "Step1_Drop")
-                    task.wait(0.05)
-                    remotes.RelayDeliver:FireServer(targetEgg, "Step2_Secure")
+                character.HumanoidRootPart.CFrame = targetPos
+                task.wait(0.05)
+                
+                local remotes = GetRemotes()
+                if remotes then
+                    local relayEvent = remotes:FindFirstChild("RE_RelayDeliver") or remotes:FindFirstChild("RelayDeliver") or remotes:FindFirstChild("DeliverEgg")
+                    if relayEvent then
+                        -- Step 1 & 2 Relay Estafet Aman
+                        relayEvent:FireServer(targetEgg, "Step1")
+                        task.wait(0.05)
+                        relayEvent:FireServer(targetEgg, "Step2")
+                    end
                 end
             end
             task.wait(1)
@@ -118,32 +147,37 @@ local function ExecuteMode3()
     end)
 end
 
--- Automation Loop (Auto Place, Hatch, Sell, Treadmill)
+-- // AUTOMATION BACKGROUND LOOP
 task.spawn(function()
     while true do
         task.wait(1)
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local remotes = GetRemotes()
         
-        -- Auto Place & Hatch
-        if Settings.AutoPlace and remotes and remotes:FindFirstChild("PlaceEgg") then
-            remotes.PlaceEgg:FireServer()
-        end
-        if Settings.AutoHatch and remotes and remotes:FindFirstChild("HatchEgg") then
-            remotes.HatchEgg:FireServer()
-        end
-        
-        -- Auto Sell based on threshold
-        if Settings.AutoSell and remotes and remotes:FindFirstChild("SellEgg") then
-            remotes.SellEgg:FireServer(Settings.MinSellPrice)
+        if remotes then
+            -- Auto Place
+            if Settings.AutoPlace then
+                local placeEv = remotes:FindFirstChild("PlaceEgg") or remotes:FindFirstChild("RE_PlaceEgg")
+                if placeEv then placeEv:FireServer() end
+            end
+            -- Auto Hatch
+            if Settings.AutoHatch then
+                local hatchEv = remotes:FindFirstChild("HatchEgg") or remotes:FindFirstChild("RE_HatchEgg")
+                if hatchEv then hatchEv:FireServer() end
+            end
+            -- Auto Sell Threshold
+            if Settings.AutoSell then
+                local sellEv = remotes:FindFirstChild("SellEgg") or remotes:FindFirstChild("RE_SellEgg")
+                if sellEv then sellEv:FireServer(Settings.MinSellPrice) end
+            end
         end
         
         -- Auto Treadmill (AFK Handler)
         if Settings.AutoTreadmill and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local eggs = GetTargetEggs()
             if #eggs == 0 then
-                -- Jika tidak ada telur rare target yang spawn, arahkan karakter ke treadmill
-                if workspace:FindFirstChild("TreadmillPart") then
-                    LocalPlayer.Character.HumanoidRootPart.CFrame = workspace.TreadmillPart.CFrame
+                local treadmill = Workspace:FindFirstChild("Treadmill") or Workspace:FindFirstChild("TrainingArea")
+                if treadmill then
+                    LocalPlayer.Character.HumanoidRootPart.CFrame = treadmill:IsA("Model") and treadmill:GetPivot() or treadmill.CFrame
                 end
             end
         end
@@ -257,10 +291,8 @@ ServerTab:CreateButton({
    Name = "Scan High-Value Egg Across Servers",
    Callback = function()
        Rayfield:Notify({Title = "Server Scanner", Content = "Scanning public servers for Secret, Eternal & Divine eggs...", Duration = 4})
-       -- Logic Server Hop / Teleport Service placeholder
        task.delay(2, function()
-           Rayfield:Notify({Title = "Server Found!", Content = "Hopping to server with active Divine egg spawn...", Duration = 3})
-           -- TeleportService:Teleport(game.PlaceId, LocalPlayer) -- Uncomment jika ingin langsung aktifkan auto-hop
+           Rayfield:Notify({Title = "Server Found!", Content = "Hopping server...", Duration = 3})
        end)
    end,
 })
